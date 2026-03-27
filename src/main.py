@@ -61,11 +61,10 @@ def displayBanner():
     Logging.info(f"Host: {ConfigLoader.get('OFTL_SCA_HOST', _DEFAULT_HOST)}")
     Logging.info(f"Port: {ConfigLoader.get('OFTL_SCA_PORT', _DEFAULT_PORT)}")
     Logging.info(f"Log Level: {ConfigLoader.get('OFTL_LOG_LEVEL', _DEFAULT_LOG_LEVEL)}")
-    Logging.info(f"Database: {ConfigLoader.get('OFTL_POSTGRESDB_NAME', "N/A")}")
-    Logging.info(f"Database Host: {ConfigLoader.get('OFTL_POSTGRESDB_HOST', "N/A")}")
+    Logging.info(f"Database: {ConfigLoader.get('OFTL_POSTGRESDB_NAME', 'N/A')}")
+    Logging.info(f"Database Host: {ConfigLoader.get('OFTL_POSTGRESDB_HOST', 'N/A')}")
+    Logging.info(f"Database Schema: {ConfigLoader.get('OFTL_POSTGRESDB_SCHEMA', 'default')}")
     Logging.info("===============================================")
-
-    pass
 
 
 if __name__ == "__main__":

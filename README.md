@@ -1,13 +1,15 @@
-# PayTrace SCA Service Template
+# PayTrace ISO 20022 Adapter
 
 ## Introduction
 
-This template is a FastAPI-based starter for building the PayTrace SCA service. It includes:
+This service is a FastAPI-based PayTrace ISO 20022 adapter. It includes:
 
 - Service bootstrap with FastAPI lifecycle hooks
 - Centralized configuration loading from environment variables and `.env`
 - PostgreSQL connection initialization through SQLAlchemy
-- Base health/probe routes
+- Schema-aware PostgreSQL startup configuration through `DBHelper`
+- Header validation middleware for inbound API requests
+- Base versioned, health, and probe routes
 - Test scaffolding with `pytest`
 
 ## Project Structure
@@ -18,10 +20,12 @@ src/
   routes/Routes.py        # API route registration and default endpoints
   utilities/ConfigLoader.py
   utilities/DBHelper.py
+  utilities/HeaderValidationMiddleware.py
   utilities/Logging.py
 tests/
-  test_routes.py
   test_config_loader.py
+  test_db_helper.py
+  test_routes.py
 ```
 
 ## Prerequisites
@@ -44,7 +48,7 @@ Essential variables should be copied from `.env.example` and updated for your en
 
 ### 2. Fetch dependencies with `uv`
 
-From the template root:
+From the repository root:
 
 ```bash
 uv sync
@@ -62,11 +66,76 @@ uv pip install -e .
 uv run python src/main.py
 ```
 
+## Environment Variables
+
+The adapter runtime uses the following environment variables.
+
+### Service Routing
+
+- `OFTL_SCA_CONTEXT_ROOT`: Base API path. Example: `/sca`
+- `OFTL_SCA_VERSION`: API version segment. Example: `1`, exposed as `/v1`
+- `OFTL_SCA_HOST`: Uvicorn bind host. Default fallback in code: `0.0.0.0`
+- `OFTL_SCA_PORT`: Uvicorn bind port. Default fallback in code: `8081`
+
+Final route prefix:
+
+```text
+${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}
+```
+
+Default example:
+
+```text
+/sca/v1
+```
+
+### Logging
+
+- `OFTL_LOG_LEVEL`: Application/Uvicorn log level. Example: `INFO`
+- `OFTL_LOG_FORMAT`: Python logging format string
+
+### Database
+
+Required for successful startup:
+
+- `OFTL_POSTGRESDB_USERNAME`: PostgreSQL username
+- `OFTL_POSTGRESDB_PASSWORD`: PostgreSQL password
+- `OFTL_POSTGRESDB_HOST`: PostgreSQL hostname
+- `OFTL_POSTGRESDB_PORT`: PostgreSQL port
+- `OFTL_POSTGRESDB_NAME`: PostgreSQL database name
+
+Optional:
+
+- `OFTL_POSTGRESDB_SCHEMA`: PostgreSQL schema/search path. Default: `default`
+- `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size. Default: `10`
+
+Reference `.env.example`:
+
+```dotenv
+OFTL_SCA_CONTEXT_ROOT="/sca"
+OFTL_SCA_VERSION="1"
+OFTL_SCA_HOST="0.0.0.0"
+OFTL_SCA_PORT="8081"
+
+OFTL_LOG_LEVEL="INFO"
+OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
+
+OFTL_POSTGRESDB_USERNAME="admin"
+OFTL_POSTGRESDB_PASSWORD="[CHANGE ME]"
+OFTL_POSTGRESDB_HOST="localhost"
+OFTL_POSTGRESDB_PORT="5432"
+OFTL_POSTGRESDB_NAME="paytrace"
+OFTL_POSTGRESDB_SCHEMA="default"
+OFTL_POSTGRESDB_POOLSIZE="10"
+```
+
+No additional `OFTL_` runtime variables are referenced by this adapter codebase today.
+
 ## Run with Docker
 
 ### 1. Build the container image
 
-From the template root (`paytrace-sca-service-template`):
+From the repository root:
 
 ```bash
 docker build -t pytrace-unittest-cimage:latest .
@@ -91,6 +160,8 @@ docker run -d \
   -e OFTL_POSTGRESDB_HOST="host.docker.internal" \
   -e OFTL_POSTGRESDB_PORT="5432" \
   -e OFTL_POSTGRESDB_NAME="paytrace" \
+  -e OFTL_POSTGRESDB_SCHEMA="default" \
+  -e OFTL_POSTGRESDB_POOLSIZE="10" \
   pytrace-unittest-cimage:latest
 ```
 
@@ -113,46 +184,6 @@ curl http://localhost:8081/_healthz
 curl http://localhost:8081/_probe
 ```
 
-## Configuration Reference
-
-The core uses the following environment variables:
-
-### Service Routing
-
-- `OFTL_SCA_CONTEXT_ROOT`: Base API path (example: `/sca`)
-- `OFTL_SCA_VERSION`: API version segment (example: `1`, exposed as `/v1`)
-- `OFTL_SCA_HOST`: Bind host for Uvicorn (default fallback in code: `0.0.0.0`)
-- `OFTL_SCA_PORT`: Bind port for Uvicorn (default fallback in code: `8081`)
-
-Final route prefix is:
-
-```text
-${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}
-```
-
-Example with defaults in `.env.example`:
-
-```text
-/sca/v1
-```
-
-### Logging
-
-- `OFTL_LOG_LEVEL`: Logger/Uvicorn log level (`INFO`, `DEBUG`, etc.)
-- `OFTL_LOG_FORMAT`: Python logging format string
-
-### Database (Required for startup DB initialization)
-
-- `OFTL_POSTGRESDB_USERNAME`
-- `OFTL_POSTGRESDB_PASSWORD`
-- `OFTL_POSTGRESDB_HOST`
-- `OFTL_POSTGRESDB_PORT`
-- `OFTL_POSTGRESDB_NAME`
-
-Optional:
-
-- `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size (default: `10`)
-
 ## Default Routes
 
 Registered in `src/routes/Routes.py`:
@@ -160,6 +191,19 @@ Registered in `src/routes/Routes.py`:
 - `GET /` under the versioned service prefix (for example: `GET /sca/v1/`)
 - `GET /_healthz` (public)
 - `GET /_probe` (public)
+
+The middleware in `src/utilities/HeaderValidationMiddleware.py` enforces these request headers for non-exempt routes:
+
+- `Authorization`
+- `X-Transaction-Id`
+- `X-Correlation-Id`
+- `Accept-Language`
+- `Accept`
+
+For `POST`, `PUT`, and `PATCH`, it also requires:
+
+- `Idempotency-Key`
+- `Content-Type`
 
 Quick check:
 
@@ -199,6 +243,7 @@ Run specific tests:
 
 ```bash
 uv run pytest tests/test_config_loader.py -v
+uv run pytest tests/test_db_helper.py -v
 uv run pytest tests/test_routes.py -v
 ```
 
