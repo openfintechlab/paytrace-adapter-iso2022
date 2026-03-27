@@ -188,9 +188,23 @@ curl http://localhost:8081/_probe
 
 Registered in `src/routes/Routes.py`:
 
-- `GET /` under the versioned service prefix (for example: `GET /sca/v1/`)
+- `POST /` under the versioned service prefix (for example: `POST /sca/v1/`)
 - `GET /_healthz` (public)
 - `GET /_probe` (public)
+
+The JSON endpoints follow the PayTrace standard response envelope:
+
+```json
+{
+  "result": {
+    "code": "PT-0200",
+    "description": "Resource retrieved successfully"
+  },
+  "payload": {
+    "status": "ok"
+  }
+}
+```
 
 The middleware in `src/utilities/HeaderValidationMiddleware.py` enforces these request headers for non-exempt routes:
 
@@ -208,10 +222,27 @@ For `POST`, `PUT`, and `PATCH`, it also requires:
 Quick check:
 
 ```bash
-curl http://localhost:8081/sca/v1/
+curl -X POST http://localhost:8081/sca/v1/ \
+  -H 'Authorization: Bearer token' \
+  -H 'X-Transaction-Id: 123e4567-e89b-12d3-a456-426614174000' \
+  -H 'X-Correlation-Id: 123e4567-e89b-12d3-a456-426614174001' \
+  -H 'Accept-Language: en-US' \
+  -H 'Accept: application/xml' \
+  -H 'Idempotency-Key: 123e4567-e89b-12d3-a456-426614174002' \
+  -H 'Content-Type: application/xml' \
+  --data-binary @pain001.xml
 curl http://localhost:8081/_healthz
 curl http://localhost:8081/_probe
 ```
+
+### pain.001 Validation Endpoint
+
+`POST ${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}/`
+
+- Accepts a raw `pain.001` XML document in the request body.
+- Returns a `pain.002` XML status report.
+- If the XML is malformed or the root structure is not a `Document` containing `CstmrCdtTrfInitn`, the service responds with HTTP `400` and a rejection report (`GrpSts=RJCT`).
+- If the inbound XML passes the basic syntax check, the service responds with HTTP `200` and an acceptance report (`GrpSts=ACCP`).
 
 ## Create a New Route
 
@@ -245,6 +276,13 @@ Run specific tests:
 uv run pytest tests/test_config_loader.py -v
 uv run pytest tests/test_db_helper.py -v
 uv run pytest tests/test_routes.py -v
+```
+
+## Database Structure(s)
+
+``` sql
+-- Create schema
+CREATE SCHEMA IF NOT EXISTS paytrace_iso2022simulator;
 ```
 
 ## Major Libraries Used

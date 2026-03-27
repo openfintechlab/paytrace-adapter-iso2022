@@ -6,18 +6,33 @@ Description: Service Template / starter code for PayTrace SCA Service build on f
 Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/12
 """
 
-from fastapi                import FastAPI
+from fastapi                import FastAPI, HTTPException, Request
+from fastapi.exceptions     import RequestValidationError
 from routes.Routes          import Routes
 from utilities.Logging      import Logging
 from utilities.ConfigLoader import ConfigLoader 
 from utilities.DBHelper     import DBHelper
+from utilities.ExceptionHandlers import ExceptionHandlers
 from utilities.HeaderValidationMiddleware import HeaderValidationMiddleware
 from contextlib             import asynccontextmanager
+from starlette.exceptions   import HTTPException as StarletteHTTPException
 from uvicorn.config         import LOGGING_CONFIG
 
 
 import uvicorn
 import sys
+
+
+async def handle_http_exception(request: Request, exc: Exception):
+    if isinstance(exc, StarletteHTTPException):
+        return await ExceptionHandlers.http_exception_handler(request, exc)
+    return await ExceptionHandlers.unhandled_exception_handler(request, exc)
+
+
+async def handle_validation_exception(request: Request, exc: Exception):
+    if isinstance(exc, RequestValidationError):
+        return await ExceptionHandlers.validation_exception_handler(request, exc)
+    return await ExceptionHandlers.unhandled_exception_handler(request, exc)
 
 
 @asynccontextmanager
@@ -39,6 +54,10 @@ async def lifespan(_: FastAPI):
 app         = FastAPI(lifespan=lifespan)
 routes      = Routes()
 app.add_middleware(HeaderValidationMiddleware)
+app.add_exception_handler(HTTPException, handle_http_exception)
+app.add_exception_handler(StarletteHTTPException, handle_http_exception)
+app.add_exception_handler(RequestValidationError, handle_validation_exception)
+app.add_exception_handler(Exception, ExceptionHandlers.unhandled_exception_handler)
 
 # Initializing the FastAPI app and loading routes from the Routes class.
 app.include_router(routes.router)
