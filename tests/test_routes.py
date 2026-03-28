@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 import uuid
 
@@ -267,6 +268,38 @@ def test_unhandled_exception_returns_paytrace_standard_500_message():
             {
                 "code": "PT-1900",
                 "description": "An unexpected error occurred while processing the request.",
+                "field": "request",
+                "severity": "ERROR",
+            }
+        ],
+    }
+
+
+def test_request_timeout_returns_500(monkeypatch):
+    async def slow_route():
+        await asyncio.sleep(0.05)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        "utilities.RequestTimeoutMiddleware.ConfigLoader.get",
+        lambda key, default=None: "0.01" if key == "OFTL_SCA_SERVER_TIMEOUT" else default,
+    )
+
+    if not any(route.path == "/__test_timeout_500" for route in app.routes):
+        app.add_api_route("/__test_timeout_500", slow_route, methods=["GET"])
+
+    response = safe_client.get("/__test_timeout_500", headers=VALID_GET_HEADERS)
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "result": {
+            "code": "PT-1900",
+            "description": "Internal processing error",
+        },
+        "errors": [
+            {
+                "code": "PT-1900",
+                "description": "Request processing timed out.",
                 "field": "request",
                 "severity": "ERROR",
             }

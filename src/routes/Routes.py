@@ -8,6 +8,7 @@ Reference: https://github.com/openfintechlab/pytrace-backlogs/issues/12
 
 from __future__ import annotations
 
+import time
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
@@ -81,8 +82,9 @@ class Routes:
     def route_post_pain001(cls, payload: bytes) -> Response:
         """Validate an inbound pain.001 message and return a pain.002 status report."""
         parse_result = ISO20022Pain001Parser.parse(payload)
+        # time.sleep(6) # Un-Comment to simulate a long-running request for testing the RequestTimeoutMiddleware.
         if parse_result.is_valid:
-            serialization_result = ISO20022Serializer.serialize(parse_result)
+            serialization_result = ISO20022Serializer.serialize(parse_result)            
             if serialization_result.duplicate_message_id:
                 parse_result = type(parse_result)(
                     is_valid=False,

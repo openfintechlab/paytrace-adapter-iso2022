@@ -78,6 +78,7 @@ The adapter runtime uses the following environment variables.
 - `OFTL_SCA_VERSION`: API version segment. Example: `1`, exposed as `/v1`
 - `OFTL_SCA_HOST`: Uvicorn bind host. Default fallback in code: `0.0.0.0`
 - `OFTL_SCA_PORT`: Uvicorn bind port. Default fallback in code: `8081`
+- `OFTL_SCA_SERVER_TIMEOUT`: Optional application-level request timeout in seconds. If exceeded, the request is cancelled and the service returns HTTP `500`.
 
 Final route prefix:
 
@@ -137,6 +138,7 @@ OFTL_SCA_CONTEXT_ROOT="/sca"
 OFTL_SCA_VERSION="1"
 OFTL_SCA_HOST="0.0.0.0"
 OFTL_SCA_PORT="8081"
+OFTL_SCA_SERVER_TIMEOUT="30"
 
 OFTL_LOG_LEVEL="INFO"
 OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
