@@ -22,6 +22,8 @@ src/
   utilities/DBHelper.py
   utilities/HeaderValidationMiddleware.py
   utilities/Logging.py
+sql/
+  001_create_oftl_iso20022_simulator.sql  # pain.001 metadata table DDL
 tests/
   test_config_loader.py
   test_db_helper.py
@@ -108,6 +110,25 @@ Optional:
 
 - `OFTL_POSTGRESDB_SCHEMA`: PostgreSQL schema/search path. Default: `default`
 - `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size. Default: `10`
+
+### ISO 20022 metadata table
+
+The repository includes PostgreSQL DDL for storing `pain.001` message metadata without persisting the raw XML payload:
+
+```text
+sql/001_create_oftl_iso20022_simulator.sql
+```
+
+The script creates:
+
+- schema: `paytrace_iso2022simulator`
+- table: `oftl_iso20022_simulator`
+
+Design notes:
+
+- `message_id` is enforced as unique to prevent duplicate ingestion of the same `GrpHdr/MsgId`.
+- The table stores message-level metadata only, such as creation timestamp, transaction counts, control sum, debtor and initiator details, payment method, and aggregate instructed amount.
+- The raw `pain.001` XML document is intentionally not stored in this table.
 
 Reference `.env.example`:
 
@@ -280,10 +301,7 @@ uv run pytest tests/test_routes.py -v
 
 ## Database Structure(s)
 
-``` sql
--- Create schema
-CREATE SCHEMA IF NOT EXISTS paytrace_iso2022simulator;
-```
+Please refer to the DDL script in `sql/001_create_oftl_iso20022_simulator.sql` for the PostgreSQL schema and table structure used for storing `pain.001` message metadata.
 
 ## Major Libraries Used
 

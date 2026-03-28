@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from domain.ISO20022Pain001Parser import ISO20022Pain001Parser
+from domain.ISO20022Serializer import ISO20022Serializer
 from utilities import APIMessage, ConfigLoader
 
 
@@ -80,6 +81,16 @@ class Routes:
     def route_post_pain001(cls, payload: bytes) -> Response:
         """Validate an inbound pain.001 message and return a pain.002 status report."""
         parse_result = ISO20022Pain001Parser.parse(payload)
+        if parse_result.is_valid:
+            serialization_result = ISO20022Serializer.serialize(parse_result)
+            if serialization_result.duplicate_message_id:
+                parse_result = type(parse_result)(
+                    is_valid=False,
+                    reason=serialization_result.reason,
+                    original_message_id=parse_result.original_message_id,
+                    metadata=parse_result.metadata,
+                )
+
         status_code = 200 if parse_result.is_valid else 400
 
         return Response(

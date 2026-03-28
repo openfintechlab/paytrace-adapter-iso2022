@@ -1,6 +1,14 @@
+from pathlib import Path
+import uuid
+
 from fastapi.testclient import TestClient
+import pytest
+from sqlalchemy import text
 
 from src.main import app
+from src.domain.ISO20022Serializer import ISO20022SerializationResult
+from src.utilities.ConfigLoader import ConfigLoader
+from src.utilities.DBHelper import DBHelper
 
 
 client = TestClient(app)
@@ -34,6 +42,123 @@ VALID_PAIN_001_XML = """<?xml version="1.0" encoding="UTF-8"?>
   </CstmrCdtTrfInitn>
 </Document>
 """
+
+DB_REQUIRED_ENV_KEYS = (
+    "OFTL_POSTGRESDB_USERNAME",
+    "OFTL_POSTGRESDB_PASSWORD",
+    "OFTL_POSTGRESDB_HOST",
+    "OFTL_POSTGRESDB_PORT",
+    "OFTL_POSTGRESDB_NAME",
+)
+SIMULATOR_TABLE_NAME = "paytrace_iso2022simulator.oftl_iso20022_simulator"
+
+
+def _is_database_configured() -> bool:
+    return all(ConfigLoader.get(key) for key in DB_REQUIRED_ENV_KEYS)
+
+
+def _ensure_simulator_table_exists() -> None:
+    ddl_path = Path(__file__).resolve().parents[1] / "sql" / "001_create_oftl_iso20022_simulator.sql"
+    ddl_statements = [statement.strip() for statement in ddl_path.read_text().split(";") if statement.strip()]
+    if DBHelper._engine is None:
+        raise RuntimeError("Database engine is not initialized.")
+
+    with DBHelper._engine.begin() as connection:
+        for statement in ddl_statements:
+            connection.execute(text(statement))
+
+
+def test_post_pain001_returns_acceptance_report_for_valid_xml(monkeypatch):
+    monkeypatch.setattr(
+        "src.routes.Routes.ISO20022Serializer.serialize",
+        lambda parse_result: ISO20022SerializationResult(stored=True),
+    )
+
+    response = client.post(ROOT_PATH, content=VALID_PAIN_001_XML, headers=VALID_HEADERS)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert "<GrpSts>ACCP</GrpSts>" in response.text
+    assert "pain.001 message accepted." in response.text
+
+
+def test_post_pain001_persists_message_metadata_and_cleans_up():
+    if not _is_database_configured():
+        pytest.skip("Database configuration is required for persistence route test.")
+
+    if not DBHelper.initialize_connection():
+        pytest.skip("Database connection could not be initialized for persistence route test.")
+
+    _ensure_simulator_table_exists()
+
+    unique_message_id = f"MSG-{uuid.uuid4()}"
+    payload = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">
+  <CstmrCdtTrfInitn>
+    <GrpHdr>
+      <MsgId>{unique_message_id}</MsgId>
+      <CreDtTm>2026-03-28T10:15:30Z</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+      <CtrlSum>150.25</CtrlSum>
+      <InitgPty>
+        <Nm>Open Fintech Lab</Nm>
+      </InitgPty>
+    </GrpHdr>
+    <PmtInf>
+      <PmtMtd>TRF</PmtMtd>
+      <BtchBookg>true</BtchBookg>
+      <ReqdExctnDt>2026-03-29</ReqdExctnDt>
+      <Dbtr>
+        <Nm>Acme Corp</Nm>
+      </Dbtr>
+      <DbtrAcct>
+        <Id>
+          <IBAN>DE89370400440532013000</IBAN>
+        </Id>
+      </DbtrAcct>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEFF</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <ChrgBr>SLEV</ChrgBr>
+      <CdtTrfTxInf>
+        <Amt>
+          <InstdAmt Ccy="EUR">150.25</InstdAmt>
+        </Amt>
+      </CdtTrfTxInf>
+    </PmtInf>
+  </CstmrCdtTrfInitn>
+</Document>
+"""
+
+    try:
+        response = client.post(ROOT_PATH, content=payload, headers=VALID_HEADERS)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("application/xml")
+        assert "<GrpSts>ACCP</GrpSts>" in response.text
+
+        rows = DBHelper.execute_select(
+            f"""
+            SELECT message_id, processing_status, debtor_name, instructed_currency
+            FROM {SIMULATOR_TABLE_NAME}
+            WHERE message_id = :message_id
+            """,
+            params={"message_id": unique_message_id},
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["message_id"] == unique_message_id
+        assert rows[0]["processing_status"] == "VALIDATED"
+        assert rows[0]["debtor_name"] == "Acme Corp"
+        assert rows[0]["instructed_currency"] == "EUR"
+    finally:
+        if DBHelper.initialize_connection():
+            DBHelper.execute_delete(
+                f"DELETE FROM {SIMULATOR_TABLE_NAME} WHERE message_id = :message_id",
+                params={"message_id": unique_message_id},
+            )
 
 
 def test_healthz_status_code_is_success():
@@ -75,15 +200,6 @@ def test_post_pain001_rejects_request_when_required_headers_are_missing():
     assert payload["errors"]
 
 
-def test_post_pain001_returns_acceptance_report_for_valid_xml():
-    response = client.post(ROOT_PATH, content=VALID_PAIN_001_XML, headers=VALID_HEADERS)
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/xml")
-    assert "<GrpSts>ACCP</GrpSts>" in response.text
-    assert "pain.001 message accepted." in response.text
-
-
 def test_post_pain001_returns_rejection_report_for_invalid_xml():
     invalid_xml = "<Document><Broken></Document>"
 
@@ -93,6 +209,24 @@ def test_post_pain001_returns_rejection_report_for_invalid_xml():
     assert response.headers["content-type"].startswith("application/xml")
     assert "<GrpSts>RJCT</GrpSts>" in response.text
     assert "syntax validation failed" in response.text
+
+
+def test_post_pain001_rejects_duplicate_message_id(monkeypatch):
+    monkeypatch.setattr(
+        "src.routes.Routes.ISO20022Serializer.serialize",
+        lambda parse_result: ISO20022SerializationResult(
+            stored=False,
+            duplicate_message_id=True,
+            reason="duplicate message id detected: MSG-001",
+        ),
+    )
+
+    response = client.post(ROOT_PATH, content=VALID_PAIN_001_XML, headers=VALID_HEADERS)
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("application/xml")
+    assert "<GrpSts>RJCT</GrpSts>" in response.text
+    assert "duplicate message id detected: MSG-001" in response.text
 
 
 def test_missing_route_returns_paytrace_standard_404_message():
