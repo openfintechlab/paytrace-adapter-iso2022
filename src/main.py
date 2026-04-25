@@ -79,7 +79,7 @@ def displayBanner():
     Logging.info("===============================================")
     Logging.info("Starting PayTrace SCA Service")
     Logging.info(f"Version: {ConfigLoader.get('OFTL_SCA_VERSION', 'N/A')}")
-    Logging.info(f"Context Root: {ConfigLoader.get('OFTL_SCA_CONTEXT_ROOT', 'N/A')}")
+    Logging.info(f"Context Root: {ConfigLoader.get('OFTL_SCA_CONTEXT_ROOT', 'N/A')}/v{ConfigLoader.get('OFTL_SCA_VERSION', 'N/A')}")
     Logging.info(f"Host: {ConfigLoader.get('OFTL_SCA_HOST', _DEFAULT_HOST)}")
     Logging.info(f"Port: {ConfigLoader.get('OFTL_SCA_PORT', _DEFAULT_PORT)}")
     Logging.info(f"Server Timeout: {ConfigLoader.get('OFTL_SCA_SERVER_TIMEOUT', _DEFAULT_SERVER_TIMEOUT)}")

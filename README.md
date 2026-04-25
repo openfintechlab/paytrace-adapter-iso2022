@@ -172,7 +172,7 @@ Use the following command pattern to run the service with required environment v
 docker run -d \
   --name paytrace-unittest-cimage01 \
   -p 8081:8081 \
-  -e OFTL_SCA_CONTEXT_ROOT="/sca" \
+  -e OFTL_SCA_CONTEXT_ROOT="/adapter/iso20022/v1" \
   -e OFTL_SCA_VERSION="1" \
   -e OFTL_SCA_HOST="0.0.0.0" \
   -e OFTL_SCA_PORT="8081" \
