@@ -2,7 +2,11 @@
 
 ## Introduction
 
-This service is a FastAPI-based PayTrace ISO 20022 adapter. It includes:
+`paytrace-adapter-iso2022` is the PayTrace boundary service for ISO 20022 payment message validation and simulation. It accepts `pain.001` customer credit transfer XML over HTTP, performs basic XML and message-shape checks, stores message-level metadata in PostgreSQL, and returns an ISO 20022-style status response.
+
+In the PayTrace architecture, this adapter represents the downstream payment network or core banking integration boundary. The payment processor depends on it to convert internal row-processing decisions into a standards-oriented payment status, while the adapter keeps transport concerns, API header validation, ISO 20022 parsing, and response serialization isolated from worker services.
+
+The implementation includes:
 
 - Service bootstrap with FastAPI lifecycle hooks
 - Centralized configuration loading from environment variables and `.env`
@@ -48,7 +52,7 @@ cp .env.example .env
 
 Essential variables should be copied from `.env.example` and updated for your environment.
 
-### 2. Fetch dependencies with `uv`
+### 2. Install dependencies
 
 From the repository root:
 
@@ -68,7 +72,94 @@ uv pip install -e .
 uv run python src/main.py
 ```
 
-## Environment Variables
+## Docker
+
+### 1. Build the container image
+
+From the repository root:
+
+```bash
+docker build -t paytrace-adapter-iso2022:latest .
+```
+
+The Dockerfile uses build arguments for its base images. Defaults are safe for local builds:
+
+```text
+DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev
+DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3
+```
+
+Override them when needed:
+
+```bash
+docker build \
+  --build-arg DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev \
+  --build-arg DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3 \
+  -t paytrace-adapter-iso2022:latest .
+```
+
+The GitHub Docker build workflow reads the same values from GitHub Actions variables named `DOCKER_PYTHON_BUILDER_IMAGE` and `DOCKER_PYTHON_RUNTIME_IMAGE`, falling back to the defaults above when the variables are not set. Published images use the Docker Hub repository `openfintechlab/paytrace-adapter-iso2022`.
+
+Commit message controls:
+
+- `[build docker]` builds the image.
+- `[buildandpush docker]` builds and pushes the image.
+
+### 2. Run the container
+
+Use the following command pattern to run the service with required environment variables:
+
+```bash
+docker run -d \
+  --name paytrace-adapter-iso2022 \
+  -p 8081:8081 \
+  -e OFTL_SCA_CONTEXT_ROOT="/adapter/iso20022/v1" \
+  -e OFTL_SCA_VERSION="1" \
+  -e OFTL_SCA_HOST="0.0.0.0" \
+  -e OFTL_SCA_PORT="8081" \
+  -e OFTL_LOG_LEVEL="INFO" \
+  -e OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s" \
+  -e OFTL_POSTGRESDB_USERNAME="admin" \
+  -e OFTL_POSTGRESDB_PASSWORD="[CHANGE ME]" \
+  -e OFTL_POSTGRESDB_HOST="host.docker.internal" \
+  -e OFTL_POSTGRESDB_PORT="5432" \
+  -e OFTL_POSTGRESDB_NAME="paytrace" \
+  -e OFTL_POSTGRESDB_SCHEMA="default" \
+  -e OFTL_POSTGRESDB_POOLSIZE="10" \
+  paytrace-adapter-iso2022:latest
+```
+
+Or use a `.env` file with `--env-file`:
+
+```bash
+docker run -d \
+  --name paytrace-adapter-iso2022 \
+  -p 8081:8081 \
+  --env-file .env \
+  paytrace-adapter-iso2022:latest
+```
+
+### 3. Verify container and endpoints
+
+```bash
+docker logs -f paytrace-adapter-iso2022
+curl http://localhost:8081/sca/v1/
+curl http://localhost:8081/_healthz
+curl http://localhost:8081/_probe
+```
+
+## Service Processing Flow
+
+1. FastAPI starts through `src/main.py` and registers routes from `src/routes/Routes.py`.
+2. The startup lifecycle loads `OFTL_*` configuration and validates PostgreSQL connectivity.
+3. Public health endpoints remain available at `/_healthz` and `/_probe`.
+4. Non-exempt API routes pass through header validation middleware.
+5. `POST ${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}/` accepts raw `pain.001` XML.
+6. The adapter validates that the XML is a customer credit transfer initiation document.
+7. Message metadata is persisted without storing the full raw payment XML.
+8. The adapter returns a `pain.002` status report with acceptance or rejection details.
+
+## Configuration Reference
 
 The adapter runtime uses the following environment variables.
 
@@ -154,60 +245,7 @@ OFTL_POSTGRESDB_POOLSIZE="10"
 
 No additional `OFTL_` runtime variables are referenced by this adapter codebase today.
 
-## Run with Docker
-
-### 1. Build the container image
-
-From the repository root:
-
-```bash
-docker build -t pytrace-unittest-cimage:latest .
-```
-
-### 2. Run the container
-
-Use the following command pattern to run the service with required environment variables:
-
-```bash
-docker run -d \
-  --name paytrace-unittest-cimage01 \
-  -p 8081:8081 \
-  -e OFTL_SCA_CONTEXT_ROOT="/adapter/iso20022/v1" \
-  -e OFTL_SCA_VERSION="1" \
-  -e OFTL_SCA_HOST="0.0.0.0" \
-  -e OFTL_SCA_PORT="8081" \
-  -e OFTL_LOG_LEVEL="INFO" \
-  -e OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s" \
-  -e OFTL_POSTGRESDB_USERNAME="admin" \
-  -e OFTL_POSTGRESDB_PASSWORD="[CHANGE ME]" \
-  -e OFTL_POSTGRESDB_HOST="host.docker.internal" \
-  -e OFTL_POSTGRESDB_PORT="5432" \
-  -e OFTL_POSTGRESDB_NAME="paytrace" \
-  -e OFTL_POSTGRESDB_SCHEMA="default" \
-  -e OFTL_POSTGRESDB_POOLSIZE="10" \
-  pytrace-unittest-cimage:latest
-```
-
-Or use a `.env` file with `--env-file`:
-
-```bash
-docker run -d \
-  --name paytrace-unittest-cimage01 \
-  -p 8081:8081 \
-  --env-file .env \
-  pytrace-unittest-cimage:latest
-```
-
-### 3. Verify container and endpoints
-
-```bash
-docker logs -f paytrace-unittest-cimage01
-curl http://localhost:8081/sca/v1/
-curl http://localhost:8081/_healthz
-curl http://localhost:8081/_probe
-```
-
-## Default Routes
+## API Routes
 
 Registered in `src/routes/Routes.py`:
 
@@ -301,7 +339,7 @@ uv run pytest tests/test_db_helper.py -v
 uv run pytest tests/test_routes.py -v
 ```
 
-## Database Structure(s)
+## Database Objects
 
 Please refer to the DDL script in `sql/001_create_oftl_iso20022_simulator.sql` for the PostgreSQL schema and table structure used for storing `pain.001` message metadata.
 
