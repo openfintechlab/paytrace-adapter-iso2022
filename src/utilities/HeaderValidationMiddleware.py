@@ -6,6 +6,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from utilities.APIMessage import APIMessage
+
 
 class HeaderValidationMiddleware(BaseHTTPMiddleware):
     """Validate mandatory PayTrace headers for incoming API requests."""
@@ -57,13 +59,10 @@ class HeaderValidationMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _error_payload(missing_headers: list[str]) -> dict:
-        formatted_headers = ", ".join(missing_headers)
-        return {
-            "result": {
-                "code": "PT-1401",
-                "description": f"Missing required header(s): {formatted_headers}",
-            },
-            "errors": [
+        return APIMessage.error(
+            code="PT-1401",
+            description="Missing required field",
+            errors=[
                 {
                     "code": "PT-VAL-0001",
                     "description": f"Missing required header '{header}'",
@@ -72,4 +71,4 @@ class HeaderValidationMiddleware(BaseHTTPMiddleware):
                 }
                 for header in missing_headers
             ],
-        }
+        )

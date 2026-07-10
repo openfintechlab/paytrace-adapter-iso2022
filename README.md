@@ -1,13 +1,19 @@
-# PayTrace SCA Service Template
+# PayTrace ISO 20022 Adapter
 
 ## Introduction
 
-This template is a FastAPI-based starter for building the PayTrace SCA service. It includes:
+`paytrace-adapter-iso2022` is the PayTrace boundary service for ISO 20022 payment message validation and simulation. It accepts `pain.001` customer credit transfer XML over HTTP, performs basic XML and message-shape checks, stores message-level metadata in PostgreSQL, and returns an ISO 20022-style status response.
+
+In the PayTrace architecture, this adapter represents the downstream payment network or core banking integration boundary. The payment processor depends on it to convert internal row-processing decisions into a standards-oriented payment status, while the adapter keeps transport concerns, API header validation, ISO 20022 parsing, and response serialization isolated from worker services.
+
+The implementation includes:
 
 - Service bootstrap with FastAPI lifecycle hooks
 - Centralized configuration loading from environment variables and `.env`
 - PostgreSQL connection initialization through SQLAlchemy
-- Base health/probe routes
+- Schema-aware PostgreSQL startup configuration through `DBHelper`
+- Header validation middleware for inbound API requests
+- Base versioned, health, and probe routes
 - Test scaffolding with `pytest`
 
 ## Project Structure
@@ -18,10 +24,14 @@ src/
   routes/Routes.py        # API route registration and default endpoints
   utilities/ConfigLoader.py
   utilities/DBHelper.py
+  utilities/HeaderValidationMiddleware.py
   utilities/Logging.py
+sql/
+  001_create_oftl_iso20022_simulator.sql  # pain.001 metadata table DDL
 tests/
-  test_routes.py
   test_config_loader.py
+  test_db_helper.py
+  test_routes.py
 ```
 
 ## Prerequisites
@@ -42,9 +52,9 @@ cp .env.example .env
 
 Essential variables should be copied from `.env.example` and updated for your environment.
 
-### 2. Fetch dependencies with `uv`
+### 2. Install dependencies
 
-From the template root:
+From the repository root:
 
 ```bash
 uv sync
@@ -62,15 +72,38 @@ uv pip install -e .
 uv run python src/main.py
 ```
 
-## Run with Docker
+## Docker
 
 ### 1. Build the container image
 
-From the template root (`paytrace-sca-service-template`):
+From the repository root:
 
 ```bash
-docker build -t pytrace-unittest-cimage:latest .
+docker build -t paytrace-adapter-iso2022:latest .
 ```
+
+The Dockerfile uses build arguments for its base images. Defaults are safe for local builds:
+
+```text
+DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev
+DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3
+```
+
+Override them when needed:
+
+```bash
+docker build \
+  --build-arg DOCKER_PYTHON_BUILDER_IMAGE=dhi.io/python:3-debian13-sfw-dev \
+  --build-arg DOCKER_PYTHON_RUNTIME_IMAGE=dhi.io/python:3 \
+  -t paytrace-adapter-iso2022:latest .
+```
+
+The GitHub Docker build workflow reads the same values from GitHub Actions variables named `DOCKER_PYTHON_BUILDER_IMAGE` and `DOCKER_PYTHON_RUNTIME_IMAGE`, falling back to the defaults above when the variables are not set. Published images use the Docker Hub repository `openfintechlab/paytrace-adapter-iso2022`.
+
+Commit message controls:
+
+- `[build docker]` builds the image.
+- `[buildandpush docker]` builds and pushes the image.
 
 ### 2. Run the container
 
@@ -78,9 +111,9 @@ Use the following command pattern to run the service with required environment v
 
 ```bash
 docker run -d \
-  --name paytrace-unittest-cimage01 \
+  --name paytrace-adapter-iso2022 \
   -p 8081:8081 \
-  -e OFTL_SCA_CONTEXT_ROOT="/sca" \
+  -e OFTL_SCA_CONTEXT_ROOT="/adapter/iso20022/v1" \
   -e OFTL_SCA_VERSION="1" \
   -e OFTL_SCA_HOST="0.0.0.0" \
   -e OFTL_SCA_PORT="8081" \
@@ -91,46 +124,60 @@ docker run -d \
   -e OFTL_POSTGRESDB_HOST="host.docker.internal" \
   -e OFTL_POSTGRESDB_PORT="5432" \
   -e OFTL_POSTGRESDB_NAME="paytrace" \
-  pytrace-unittest-cimage:latest
+  -e OFTL_POSTGRESDB_SCHEMA="default" \
+  -e OFTL_POSTGRESDB_POOLSIZE="10" \
+  paytrace-adapter-iso2022:latest
 ```
 
 Or use a `.env` file with `--env-file`:
 
 ```bash
 docker run -d \
-  --name paytrace-unittest-cimage01 \
+  --name paytrace-adapter-iso2022 \
   -p 8081:8081 \
   --env-file .env \
-  pytrace-unittest-cimage:latest
+  paytrace-adapter-iso2022:latest
 ```
 
 ### 3. Verify container and endpoints
 
 ```bash
-docker logs -f paytrace-unittest-cimage01
+docker logs -f paytrace-adapter-iso2022
 curl http://localhost:8081/sca/v1/
 curl http://localhost:8081/_healthz
 curl http://localhost:8081/_probe
 ```
 
+## Service Processing Flow
+
+1. FastAPI starts through `src/main.py` and registers routes from `src/routes/Routes.py`.
+2. The startup lifecycle loads `OFTL_*` configuration and validates PostgreSQL connectivity.
+3. Public health endpoints remain available at `/_healthz` and `/_probe`.
+4. Non-exempt API routes pass through header validation middleware.
+5. `POST ${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}/` accepts raw `pain.001` XML.
+6. The adapter validates that the XML is a customer credit transfer initiation document.
+7. Message metadata is persisted without storing the full raw payment XML.
+8. The adapter returns a `pain.002` status report with acceptance or rejection details.
+
 ## Configuration Reference
 
-The core uses the following environment variables:
+The adapter runtime uses the following environment variables.
 
 ### Service Routing
 
-- `OFTL_SCA_CONTEXT_ROOT`: Base API path (example: `/sca`)
-- `OFTL_SCA_VERSION`: API version segment (example: `1`, exposed as `/v1`)
-- `OFTL_SCA_HOST`: Bind host for Uvicorn (default fallback in code: `0.0.0.0`)
-- `OFTL_SCA_PORT`: Bind port for Uvicorn (default fallback in code: `8081`)
+- `OFTL_SCA_CONTEXT_ROOT`: Base API path. Example: `/sca`
+- `OFTL_SCA_VERSION`: API version segment. Example: `1`, exposed as `/v1`
+- `OFTL_SCA_HOST`: Uvicorn bind host. Default fallback in code: `0.0.0.0`
+- `OFTL_SCA_PORT`: Uvicorn bind port. Default fallback in code: `8081`
+- `OFTL_SCA_SERVER_TIMEOUT`: Optional application-level request timeout in seconds. If exceeded, the request is cancelled and the service returns HTTP `500`.
 
-Final route prefix is:
+Final route prefix:
 
 ```text
 ${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}
 ```
 
-Example with defaults in `.env.example`:
+Default example:
 
 ```text
 /sca/v1
@@ -138,36 +185,125 @@ Example with defaults in `.env.example`:
 
 ### Logging
 
-- `OFTL_LOG_LEVEL`: Logger/Uvicorn log level (`INFO`, `DEBUG`, etc.)
+- `OFTL_LOG_LEVEL`: Application/Uvicorn log level. Example: `INFO`
 - `OFTL_LOG_FORMAT`: Python logging format string
 
-### Database (Required for startup DB initialization)
+### Database
 
-- `OFTL_POSTGRESDB_USERNAME`
-- `OFTL_POSTGRESDB_PASSWORD`
-- `OFTL_POSTGRESDB_HOST`
-- `OFTL_POSTGRESDB_PORT`
-- `OFTL_POSTGRESDB_NAME`
+Required for successful startup:
+
+- `OFTL_POSTGRESDB_USERNAME`: PostgreSQL username
+- `OFTL_POSTGRESDB_PASSWORD`: PostgreSQL password
+- `OFTL_POSTGRESDB_HOST`: PostgreSQL hostname
+- `OFTL_POSTGRESDB_PORT`: PostgreSQL port
+- `OFTL_POSTGRESDB_NAME`: PostgreSQL database name
 
 Optional:
 
-- `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size (default: `10`)
+- `OFTL_POSTGRESDB_SCHEMA`: PostgreSQL schema/search path. Default: `default`
+- `OFTL_POSTGRESDB_POOLSIZE`: SQLAlchemy pool size. Default: `10`
 
-## Default Routes
+### ISO 20022 metadata table
+
+The repository includes PostgreSQL DDL for storing `pain.001` message metadata without persisting the raw XML payload:
+
+```text
+sql/001_create_oftl_iso20022_simulator.sql
+```
+
+The script creates:
+
+- schema: `paytrace_iso2022simulator`
+- table: `oftl_iso20022_simulator`
+
+Design notes:
+
+- `message_id` is enforced as unique to prevent duplicate ingestion of the same `GrpHdr/MsgId`.
+- The table stores message-level metadata only, such as creation timestamp, transaction counts, control sum, debtor and initiator details, payment method, and aggregate instructed amount.
+- The raw `pain.001` XML document is intentionally not stored in this table.
+
+Reference `.env.example`:
+
+```dotenv
+OFTL_SCA_CONTEXT_ROOT="/sca"
+OFTL_SCA_VERSION="1"
+OFTL_SCA_HOST="0.0.0.0"
+OFTL_SCA_PORT="8081"
+OFTL_SCA_SERVER_TIMEOUT="30"
+
+OFTL_LOG_LEVEL="INFO"
+OFTL_LOG_FORMAT="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
+
+OFTL_POSTGRESDB_USERNAME="admin"
+OFTL_POSTGRESDB_PASSWORD="[CHANGE ME]"
+OFTL_POSTGRESDB_HOST="localhost"
+OFTL_POSTGRESDB_PORT="5432"
+OFTL_POSTGRESDB_NAME="paytrace"
+OFTL_POSTGRESDB_SCHEMA="default"
+OFTL_POSTGRESDB_POOLSIZE="10"
+```
+
+No additional `OFTL_` runtime variables are referenced by this adapter codebase today.
+
+## API Routes
 
 Registered in `src/routes/Routes.py`:
 
-- `GET /` under the versioned service prefix (for example: `GET /sca/v1/`)
+- `POST /` under the versioned service prefix (for example: `POST /sca/v1/`)
 - `GET /_healthz` (public)
 - `GET /_probe` (public)
+
+The JSON endpoints follow the PayTrace standard response envelope:
+
+```json
+{
+  "result": {
+    "code": "PT-0200",
+    "description": "Resource retrieved successfully"
+  },
+  "payload": {
+    "status": "ok"
+  }
+}
+```
+
+The middleware in `src/utilities/HeaderValidationMiddleware.py` enforces these request headers for non-exempt routes:
+
+- `Authorization`
+- `X-Transaction-Id`
+- `X-Correlation-Id`
+- `Accept-Language`
+- `Accept`
+
+For `POST`, `PUT`, and `PATCH`, it also requires:
+
+- `Idempotency-Key`
+- `Content-Type`
 
 Quick check:
 
 ```bash
-curl http://localhost:8081/sca/v1/
+curl -X POST http://localhost:8081/sca/v1/ \
+  -H 'Authorization: Bearer token' \
+  -H 'X-Transaction-Id: 123e4567-e89b-12d3-a456-426614174000' \
+  -H 'X-Correlation-Id: 123e4567-e89b-12d3-a456-426614174001' \
+  -H 'Accept-Language: en-US' \
+  -H 'Accept: application/xml' \
+  -H 'Idempotency-Key: 123e4567-e89b-12d3-a456-426614174002' \
+  -H 'Content-Type: application/xml' \
+  --data-binary @pain001.xml
 curl http://localhost:8081/_healthz
 curl http://localhost:8081/_probe
 ```
+
+### pain.001 Validation Endpoint
+
+`POST ${OFTL_SCA_CONTEXT_ROOT}/v${OFTL_SCA_VERSION}/`
+
+- Accepts a raw `pain.001` XML document in the request body.
+- Returns a `pain.002` XML status report.
+- If the XML is malformed or the root structure is not a `Document` containing `CstmrCdtTrfInitn`, the service responds with HTTP `400` and a rejection report (`GrpSts=RJCT`).
+- If the inbound XML passes the basic syntax check, the service responds with HTTP `200` and an acceptance report (`GrpSts=ACCP`).
 
 ## Create a New Route
 
@@ -199,8 +335,13 @@ Run specific tests:
 
 ```bash
 uv run pytest tests/test_config_loader.py -v
+uv run pytest tests/test_db_helper.py -v
 uv run pytest tests/test_routes.py -v
 ```
+
+## Database Objects
+
+Please refer to the DDL script in `sql/001_create_oftl_iso20022_simulator.sql` for the PostgreSQL schema and table structure used for storing `pain.001` message metadata.
 
 ## Major Libraries Used
 
